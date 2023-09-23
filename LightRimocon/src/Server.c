@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include <pthread.h> //コンパイル時に -pthreadオプションをつける
+#include <cjson/cJSON.h> //コンパイル時に -lcjsonオプションをつける
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -13,7 +14,8 @@
 #define DEVICE_DRIVER "/dev/lrimo"
 #define LOGFILE "/home/pi/BackApp/applog"
 #define SERVER_PORT 11111
-#define BUF_SIZE 3
+#define MAX_REQUEST_SIZE 1024
+#define POST_BODY_SIZE 20
 
 pthread_mutex_t FILE_ACCESS;
 unsigned char LightMode = 0; //証明のon/off状態 //最後に書き込んだ値(あくまでも予測) //FILE_ACCESS所有時のみ変更可
@@ -76,26 +78,55 @@ void *button_read(void *arg){
 	return NULL;
 }
 
-int getsignal(int sock, char *signal, int len){
-	char send_buf=0;
-	char recv_buf[len];
-
-	memset(recv_buf, 0, sizeof(char)*len+1);
-	if(recv(sock, recv_buf, sizeof(char)*len, 0) <= 0){ //受信
-		put_log("recv error\n");
-		send_buf = 1;
-	}else{
-		for(int i=0; i<len; i++){
-			*(signal+i) = recv_buf[i];
-		}
-		*(signal+len) = 0;
-	}
-	// 返答
-	if(send(sock, &send_buf, 1, 0)==-1){
-		put_log( "send error");
+int http_responce(int sock, int status, const char *status_message, const char *body){
+	char responce[MAX_REQUEST_SIZE];
+	
+	if(sprintf(responce, "HTTP/1.1 %d %s\r\n\r\n", status, status_message)==EOF){
+		put_log("http responce key error");
 		return -1;
 	}
-	return -send_buf;
+	if(write(sock, responce, strlen(responce))<=0){
+		put_log("http responce send error");
+		return -1;
+	}
+	return 0;
+}
+
+int http_communication(int sock, char *body, int body_len){
+	char send_buf=0;
+	char recv_buf[MAX_REQUEST_SIZE];
+
+	memset(recv_buf, 0, sizeof(char)*MAX_REQUEST_SIZE);
+
+	if(read(sock, recv_buf, sizeof(char)*MAX_REQUEST_SIZE)<=0){
+		put_log("failed to read request header");
+		return -1;
+	}else if(strstr(recv_buf, "POST")==NULL){
+		http_responce(sock, 404, "Not Found", NULL);
+		return 1;
+	}else {
+		memset(body, 0, sizeof(char)*body_len);
+		if(read(sock, body, sizeof(char)*body_len)<=0){
+			put_log("failed to read request body");
+			return -1;
+		}
+	}
+	return 0;
+}
+
+int read_jsondata(const char *json_str){
+	cJSON *root = cJSON_Parse(json_str);
+	if(root == NULL){
+		put_log("failed to parse JSON data");
+		return -1;
+	}
+	cJSON *value = cJSON_GetObjectItem(root, "signal");
+	if(value == NULL || !cJSON_IsNumber(value)){
+		put_log("JSON value error");
+		cJSON_Delete(root);
+		return -1;
+	}
+	return value->valueint;
 }
 
 void *socket_server(void *arg){
@@ -131,8 +162,12 @@ void *socket_server(void *arg){
 		return NULL;
 	}
 
-	char signal[BUF_SIZE];
+	char post_json[POST_BODY_SIZE];
+	char signal[4]; //"on" or "off"
+	unsigned char sig;
+	char failure[2]; //クライアントに返すステータス 0/1
 	while(1){
+		strcpy(failure, "0");
 		// waiting connection...
 		printf("wating connection...\n");
 		if((c_sock = accept(w_addr, (struct sockaddr *)&client, &client_size))==-1){
@@ -141,18 +176,24 @@ void *socket_server(void *arg){
 		}
 		printf("accept ok\n");
 		// connected
-		if(getsignal(c_sock, signal, BUF_SIZE)==-1){
+		if(http_communication(c_sock, post_json, POST_BODY_SIZE)!=0){
 			continue;
 		}
 
-		unsigned char sig = -1;
-		if(strcmp(signal, "off") == 0){
-			sig = 0;
-		}else if(strcmp(signal, "on") == 0){
-			sig = 1;
-		}else{
-			continue;
+		memset(signal, 0, 4);
+		switch(read_jsondata(post_json)){
+			case 0:
+				strcpy(signal, "off");
+				sig = 0;
+				break;
+			case 1:
+				strcpy(signal, "on");
+				sig = 1;
+				break;
+			default:
+				sig = -1;
 		}
+		if(sig == -1) continue;
 
 		if(pthread_mutex_trylock(&FILE_ACCESS)==0){
 			FILE *dd;
@@ -164,13 +205,18 @@ void *socket_server(void *arg){
 					put_signal(signal, "App");
 				}else{
 					put_log( "device driver write error at socket_server");
+					strcpy(failure, "1");
 				}
 				fclose(dd);
 			}
 			pthread_mutex_unlock(&FILE_ACCESS);
 		}else{
 			put_log("failed to get device driver write access at socket_server");
+			strcpy(failure, "1");
 		}
+
+		http_responce(c_sock, 200, "OK", failure);
+		close(c_sock);
 	}
 	close(w_addr);
 
