@@ -1,5 +1,10 @@
 # RaspiServer
 自宅でサーバーとして常時稼働
+```
+Raspberry Pi 4 Model B
+Debian GNU/Linux 11 (bullseye)
+Linux 5.15.84-v8+
+```
 
 # 照明操作システム(LightRimocon/配下)
 自宅のリモコンの赤外線を学習し、接続した赤外線LEDから部屋の照明を操作するシステム  
