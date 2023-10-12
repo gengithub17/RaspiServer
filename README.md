@@ -32,6 +32,6 @@ Crontabに登録し定時実行
 ![image](https://github.com/gengithub17/RaspiServer/assets/25129056/40d9318d-6b2b-4237-bcd5-26dd39f3a2cd)
 
 ## 全体図
-赤外線LEDが気まぐれなのか、たまに角度を変えないと照明に信号がtodokimasenn
+赤外線LEDが気まぐれなのか、たまに角度を変えないと照明に信号が届きません
 ![image](https://github.com/gengithub17/RaspiServer/assets/25129056/6d6a64d6-5d54-42a0-ab86-40d8838d9fdb)
 
